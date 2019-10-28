@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 #include <exception>
+#include <tuple>
 
 
 namespace ast
@@ -36,8 +37,8 @@ namespace ast
 
     struct ast_tree
     {
-        std::string name = "default";                      // tag name
-        std::vector<ast_node> children;        // children
+        std::string name = "default";            // tag name
+        std::vector<ast_node> children;          // children
     };
 }
 
@@ -121,7 +122,7 @@ namespace ast
     template <typename Iterator>
     struct calculator_grammar : ast::grammar<Iterator>
     {
-        calculator_grammar()
+        calculator_grammar(bool dbg=false)
         {
             using qi::lit;
             using qi::lexeme;
@@ -138,8 +139,8 @@ namespace ast
             using phoenix::push_back;
             using qi::debug;
 
-            CNAME %= raw[lexeme[alpha >> *(alnum | '_')]];
-            NUMBER %= double_;
+            CNAME = raw[lexeme[alpha >> *(alnum | '_')]];
+            NUMBER = double_;
 
             number = NUMBER                             [at_c<0>(_val) = "number", push_back(at_c<1>(_val), _1)];
             const_ref = CNAME                           [at_c<0>(_val) = "const", push_back(at_c<1>(_val), _1)];
@@ -170,24 +171,23 @@ namespace ast
                 )
                 | product                               [_val = _1];
 
-            /*
-            sum.name("sum");
-            product.name("product");
-            neg.name("neg");
-            pow.name("pow");
-            value.name("value");
-            number.name("number");
-            const_ref.name("const");
+            if (dbg) {
+                sum.name("sum");
+                product.name("product");
+                neg.name("neg");
+                pow.name("pow");
+                value.name("value");
+                number.name("number");
+                const_ref.name("const");
 
-
-            debug(number);
-            debug(const_ref);
-            debug(value);
-            debug(pow);
-            debug(neg);
-            debug(product);
-            debug(sum);
-            */
+                debug(number);
+                debug(const_ref);
+                debug(value);
+                debug(pow);
+                debug(neg);
+                debug(product);
+                debug(sum);
+            }
 
            this->start = sum[_val = _1];
            // TODO: Why compiler not allow this:
@@ -246,5 +246,57 @@ void print_tree(const ast::ast_tree &tree)
     ast::ast_tree_printer printer;
     printer(tree);
     std::cout << std::endl;
+}
+
+
+
+std::tuple<int, int, int, int> count_nodes(const ast::ast_tree &tree)
+{
+    struct node_counter : boost::static_visitor<>
+    {
+        void operator()(const ast::ast_tree &ast)
+        {
+            nodes++;
+            subtrees++;
+            depth++;
+            if (max_depth < depth) {
+                max_depth = depth;
+            }
+            BOOST_FOREACH(ast::ast_node const& node, ast.children)
+            {
+                boost::apply_visitor(*this, node);
+            }
+            depth--;
+        }
+
+        void operator()(const std::string &value)
+        {
+            count_leaf();
+        }
+
+        void operator()(double value)
+        {
+            count_leaf();
+        }
+
+        void count_leaf() {
+            nodes++;
+            leafs++;
+            if (max_depth < depth + 1) {
+                max_depth = depth + 1;
+            }
+        }
+
+        size_t nodes = 0;
+        size_t subtrees = 0;
+        size_t leafs = 0;
+        size_t depth = 0;
+        size_t max_depth = 0;
+    };
+    node_counter counter;
+
+    counter(tree);
+
+    return {counter.nodes, counter.subtrees, counter.leafs, counter.max_depth};
 }
 

@@ -5,3 +5,4 @@ compile_vs_interpret_stack
 compile_vs_interpret_vararg
 
 varargs_test
+compile_vs_interpret_fast

@@ -16,21 +16,6 @@
 #include "parser.hh"
 
 
-#if 0
-// WOW! Is it possible?
-auto id = [](auto x){ return x; };
-
-template<typename T, typename ...Targs>
-auto value_closure(T x)
-{
-    return [x](Targs... xs){ return x; };
-}
-#endif
-/*
-    Possibly it will be hard to implement multi-parameter lambda,
-    so let's try to pass parameters as vector or tuple of std::any.
-*/
-
 
 typedef std::function<std::any(const std::vector<std::any>&)> op_f;
 
@@ -110,7 +95,7 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
 
             // calculate args
             std::transform(args.begin(), args.end(), std::back_inserter(a), 
-                [e](compiled_f f){ return f(e); });
+                [&e](compiled_f f){ return f(e); });
 
             // return result of calling func on calculated args
             return _func(a);
@@ -139,9 +124,9 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
  *============================================================================================
  */
 
-struct ast_node_interpreter
+struct interpreter
 {
-    ast_node_interpreter(const ops_t &ops) :
+    interpreter(const ops_t &ops) :
         ops(ops)
     {}
 
@@ -197,6 +182,7 @@ void test(
     bool verbose=false,
     bool debug=false)
 {
+    printf("\n");
     if (verbose) {
         printf("\n%s\n", text.c_str());
     }
@@ -211,6 +197,15 @@ void test(
         print_tree(tree);
     }
 
+    auto counters = count_nodes(tree);
+    printf("chars: %ld, nodes: %d, subtrees: %d, leafs: %d, max_depth: %d\n",
+        text.size(),
+        std::get<0>(counters),
+        std::get<1>(counters),
+        std::get<2>(counters),
+        std::get<3>(counters)
+    );
+
     auto start_compile = std::chrono::steady_clock::now();
     compiled_f f = ast_node_compiler::compile_tree(cops, tree);
     auto elapsed_compile = std::chrono::steady_clock::now() - start_compile;
@@ -219,8 +214,7 @@ void test(
     std::any result_exec = f(env);
     auto elapsed_exec = std::chrono::steady_clock::now() - start_exec;
 
-
-    ast_node_interpreter interpreter(ops);
+    interpreter interpreter(ops);
     auto start_interpret = std::chrono::steady_clock::now();
     std::any result_interpret = interpreter.interpret_tree(tree, env);
     auto elapsed_interpret = std::chrono::steady_clock::now() - start_compile;
@@ -286,10 +280,17 @@ int main()
     test(ops, g, "x * 2 + -y", {{"x", 1.0}, {"y", 2.0}}, 0.0);
     test(ops, g, "x / 2 - 1 / y", {{"x", 1.0}, {"y", 2.0}}, 0.0);
     test(ops, g, "x ^ y - 1", {{"x", 1.0}, {"y", 2.0}}, 0.0);
-    test(ops, g, "2 + -3^x - 2*(3*y - -4*z^g^u)", {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}, {"g", 2.0}, {"u", 3.0}}, -2109.0);
+    test(ops, g, "2 + -3^x - 2*(3*y - -4*z^g^u)", {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}, {"g", 2.0}, {"u", 3.0}}, -2109.0, false);
 
     std::string text = "((z * y) - 4096 + 999) - (x * -1) / 0.1 - 999 - (4096 - -1 + (10 - 4096) * ((999 + x) * (z + 4096))) / ( -z / x / x - -1 + (4096 * y - z - -1)) - (999 + -1 / (0.1 + 10)) - ( -(4096 / -1) / ( -y +  -0.1))";
     
+    test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
+
+
+    while (text.size() < 5000) {
+        text += " + " + text;
+    }
+
     test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
 
 

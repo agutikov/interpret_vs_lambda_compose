@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <functional>
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 #include <any>
@@ -127,12 +128,45 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
 
     std::weak_ptr<compiler_visitors_t> ops;
 };
-
 /*============================================================================================
  * 
  * 
  *============================================================================================
  */
+
+struct interpreter
+{
+    interpreter(const ops_t &ops) :
+        ops(ops)
+    {}
+
+    std::any interpret_tree(const ast::ast_tree &tree, const env_t &env)
+    {
+        // get op functions
+        auto op = ops.find(tree.name)->second;
+        auto func = op.first;
+        auto compile_token = op.second;
+
+        if (!func.has_value()) {
+            // compile_token returns function compiled from token
+            return compile_token(tree.children[0])(env);
+        } else {
+            // interpret function call
+            if (tree.children.size() == 1) {
+                auto arg0 = interpret_tree(boost::get<ast::ast_tree>(tree.children[0]), env);
+                return std::any_cast<std::function<std::any(std::any)>>(func)(arg0);
+            } else if (tree.children.size() == 2) {
+                auto arg0 = interpret_tree(boost::get<ast::ast_tree>(tree.children[0]), env);
+                auto arg1 = interpret_tree(boost::get<ast::ast_tree>(tree.children[1]), env);
+                return std::any_cast<std::function<std::any(std::any, std::any)>>(func)(arg0, arg1);
+            } else {
+                throw std::invalid_argument("ERROR: interpreter::interpret_tree(const ast::ast_tree &, const env_t &) not supported number of function arguments");
+            }
+        }
+    }
+
+    const ops_t &ops;
+};
 
 
 
@@ -156,6 +190,7 @@ void test(
     bool verbose=false,
     bool debug=false)
 {
+    printf("\n");
     if (verbose) {
         printf("\n%s\n", text.c_str());
     }
@@ -170,21 +205,34 @@ void test(
         print_tree(tree);
     }
 
+    auto counters = count_nodes(tree);
+    printf("chars: %ld, nodes: %d, subtrees: %d, leafs: %d, max_depth: %d\n",
+        text.size(),
+        std::get<0>(counters),
+        std::get<1>(counters),
+        std::get<2>(counters),
+        std::get<3>(counters)
+    );
+
     auto start_compile = std::chrono::steady_clock::now();
     compiled_f f = ast_node_compiler::compile_tree(cops, tree);
     auto elapsed_compile = std::chrono::steady_clock::now() - start_compile;
-
-    //std::cout << "compiled" << std::endl;
 
     auto start_exec = std::chrono::steady_clock::now();
     std::any result_exec = f(env);
     auto elapsed_exec = std::chrono::steady_clock::now() - start_exec;
 
+    interpreter interpreter(ops);
+    auto start_interpret = std::chrono::steady_clock::now();
+    std::any result_interpret = interpreter.interpret_tree(tree, env);
+    auto elapsed_interpret = std::chrono::steady_clock::now() - start_compile;
 
-    printf("parse: %.3f us, compile: %.3f us, exec: %.3f us\n",
+    printf("parse: %.3f us, compile: %.3f us, exec: %.3f us, interpret: %.3f us, speedup: %.2f\n",
         us(elapsed_parse),
         us(elapsed_compile),
-        us(elapsed_exec));
+        us(elapsed_exec),
+        us(elapsed_interpret),
+        us(elapsed_interpret)/us(elapsed_exec));
 
     if (verbose) {
         printf("result: %f\n", std::any_cast<double>(result_exec));
