@@ -101,12 +101,25 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
         // The fastest way would be to use call stack directly.
         // different implementations of lambdas depending on number of args (with or without checking at compile time)
         if (args.size() == 1) {
-            return [_func = func, arg0 = args[0]] (const env_t& e) -> std::any {
-                return std::any_cast<std::function<std::any(std::any)>>(_func)(arg0(e));
+            return
+            [
+                _func = std::any_cast<std::function<std::any(std::any)>>(func),
+                arg0 = args[0]
+            ]
+            (const env_t& e) -> std::any
+            {
+                return _func(arg0(e));
             };
         } else if (args.size() == 2) {
-            return [_func = func, arg0 = args[0], arg1 = args[1]] (const env_t& e) -> std::any {
-                return std::any_cast<std::function<std::any(std::any, std::any)>>(_func)(arg0(e), arg1(e));
+            return
+            [
+                _func = std::any_cast<std::function<std::any(std::any, std::any)>>(func),
+                arg0 = args[0],
+                arg1 = args[1]
+            ]
+            (const env_t& e) -> std::any
+            {
+                return _func(arg0(e), arg1(e));
             };
         } else {
             throw std::invalid_argument("ERROR: ast_node_compiler::operator()(ast::ast_tree const&) not supported number of function arguments");
@@ -181,6 +194,11 @@ double us(std::chrono::steady_clock::duration d)
     return double(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()) / 1000.0;
 }
 
+std::any call_f_with_env(compiled_f &f, const env_t &e)
+{
+    return f(e);
+}
+
 void test(
     const ops_t &ops,
     const ast::grammar<std::string::const_iterator> &g,
@@ -219,7 +237,7 @@ void test(
     auto elapsed_compile = std::chrono::steady_clock::now() - start_compile;
 
     auto start_exec = std::chrono::steady_clock::now();
-    std::any result_exec = f(env);
+    std::any result_exec = call_f_with_env(f, env);
     auto elapsed_exec = std::chrono::steady_clock::now() - start_exec;
 
     interpreter interpreter(ops);
@@ -254,6 +272,7 @@ compile_node_f compile_number = [](const ast::ast_node &node) -> compiled_f
         return std::any(value);
     };
 };
+
 
 compile_node_f compile_const = [](const ast::ast_node &node) -> compiled_f
 {
@@ -322,7 +341,7 @@ int main()
     test(ops, g, "2 + -3^x - 2*(3*y - -4*z^g^u)", {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}, {"g", 2.0}, {"u", 3.0}}, -2109.0);
 
     std::string text = "((z * y) - 4096 + 999) - (x * -1) / 0.1 - 999 - (4096 - -1 + (10 - 4096) * ((999 + x) * (z + 4096))) / ( -z / x / x - -1 + (4096 * y - z - -1)) - (999 + -1 / (0.1 + 10)) - ( -(4096 / -1) / ( -y +  -0.1))";
-    
+
     test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
 
 
@@ -331,6 +350,7 @@ int main()
     }
 
     test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
+
 
     return 0;
 }

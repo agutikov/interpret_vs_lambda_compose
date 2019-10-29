@@ -169,6 +169,12 @@ double us(std::chrono::steady_clock::duration d)
     return double(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()) / 1000.0;
 }
 
+std::any call_f_with_env(compiled_f &f, const env_t &e)
+{
+    stack_t stack;
+    return f(stack, e);
+}
+
 void test(
     const ops_t &ops,
     const ast::grammar<std::string::const_iterator> &g,
@@ -207,8 +213,7 @@ void test(
     auto elapsed_compile = std::chrono::steady_clock::now() - start_compile;
 
     auto start_exec = std::chrono::steady_clock::now();
-    stack_t stack;
-    std::any result_exec = f(stack, env);
+    std::any result_exec = call_f_with_env(f, env);
     auto elapsed_exec = std::chrono::steady_clock::now() - start_exec;
 
     interpreter interpreter(ops);
@@ -329,13 +334,13 @@ int main()
     
     test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
 
-
+/*
     while (text.size() < 5000) {
         text += " + " + text;
     }
 
     test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
-
+*/
 
     return 0;
 }

@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <functional>
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 #include <any>
@@ -16,12 +17,11 @@
 #include "parser.hh"
 
 
+typedef std::any op_f;
 
-typedef std::function<std::any(const std::vector<std::any>&)> op_f;
+typedef std::vector<double> env_t;
 
-typedef std::map<std::string, std::any> env_t;
-
-typedef std::function<std::any(const env_t&)> compiled_f;
+typedef std::function<double(const env_t&)> compiled_f;
 
 typedef std::function<compiled_f(const ast::ast_node &)> compile_node_f;
 
@@ -73,7 +73,11 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
         func(func),
         compile_token(compile_token),
         ops(ops)
-    {}
+    {
+        if (!func.has_value() && compile_token == nullptr) {
+            throw std::invalid_argument("ERROR: ast_node_compiler: At least func or compile_token must be provided.");
+        }
+    }
 
     compiled_f operator()(ast::ast_tree const& ast)
     {
@@ -85,21 +89,37 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
         }
 
         // return compiled argument
-        if (func == nullptr) {
+        if (!func.has_value()) {
             return args[0];
         }
-        
+
         // compile function call
-        return [_func = func, args] (const env_t& e) -> std::any {
-            std::vector<std::any> a;
-
-            // calculate args
-            std::transform(args.begin(), args.end(), std::back_inserter(a), 
-                [&e](compiled_f f){ return f(e); });
-
-            // return result of calling func on calculated args
-            return _func(a);
-        };
+        // The fastest way would be to use call stack directly.
+        // different implementations of lambdas depending on number of args (with or without checking at compile time)
+        if (args.size() == 1) {
+            return
+            [
+                _func = std::any_cast<std::function<double(double)>>(func),
+                arg0 = args[0]
+            ]
+            (const env_t& e) -> double
+            {
+                return _func(arg0(e));
+            };
+        } else if (args.size() == 2) {
+            return
+            [
+                _func = std::any_cast<std::function<double(double, double)>>(func),
+                arg0 = args[0],
+                arg1 = args[1]
+            ]
+            (const env_t& e) -> double
+            {
+                return _func(arg0(e), arg1(e));
+            };
+        } else {
+            throw std::invalid_argument("ERROR: ast_node_compiler::operator()(ast::ast_tree const&) not supported number of function arguments");
+        }
     }
 
     compiled_f operator()(std::string const& value)
@@ -117,7 +137,6 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
 
     std::weak_ptr<compiler_visitors_t> ops;
 };
-
 /*============================================================================================
  * 
  * 
@@ -130,36 +149,57 @@ struct interpreter
         ops(ops)
     {}
 
-    std::any interpret_tree(const ast::ast_tree &tree, const env_t &env)
+    double interpret_tree(const ast::ast_tree &tree, const env_t &env)
     {
         // get op functions
         auto op = ops.find(tree.name)->second;
         auto func = op.first;
         auto compile_token = op.second;
 
-        std::vector<std::any> args;
-        if (func == nullptr) {
+        if (!func.has_value()) {
             // compile_token returns function compiled from token
-            auto f = compile_token(tree.children[0]);
-            std::any value = f(env);
-            return value;
+            return compile_token(tree.children[0])(env);
         } else {
-            // interpret args
-            BOOST_FOREACH(ast::ast_node const& node, tree.children) {
-                std::any arg = interpret_tree(boost::get<ast::ast_tree>(node), env);
-                args.push_back(arg);
-            }
-
             // interpret function call
-            return func(args);
+            if (tree.children.size() == 1) {
+                auto arg0 = interpret_tree(boost::get<ast::ast_tree>(tree.children[0]), env);
+                return std::any_cast<std::function<double(double)>>(func)(arg0);
+            } else if (tree.children.size() == 2) {
+                auto arg0 = interpret_tree(boost::get<ast::ast_tree>(tree.children[0]), env);
+                auto arg1 = interpret_tree(boost::get<ast::ast_tree>(tree.children[1]), env);
+                return std::any_cast<std::function<double(double, double)>>(func)(arg0, arg1);
+            } else {
+                throw std::invalid_argument("ERROR: interpreter::interpret_tree(const ast::ast_tree &, const env_t &) not supported number of function arguments");
+            }
         }
-
     }
 
     const ops_t &ops;
 };
 
 
+
+std::map<std::string, size_t> const_name_2_index;
+size_t next_index = 0;
+
+void reset_const_names()
+{
+    next_index = 0;
+    const_name_2_index = {};
+}
+
+env_t convert_env(const std::map<std::string, double> &e)
+{
+    env_t v;
+    for (const auto& [key, value] : e) {
+        auto it = const_name_2_index.find(key);
+        if (v.size() <= it->second) {
+            v.resize(it->second + 1);
+        }
+        v[it->second] = value;
+    }
+    return v;
+}
 
 
 /*============================================================================================
@@ -173,16 +213,17 @@ double us(std::chrono::steady_clock::duration d)
     return double(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()) / 1000.0;
 }
 
-std::any call_f_with_env(compiled_f &f, const env_t &e)
+double call_f_with_env(compiled_f &f, const std::map<std::string, double> &e)
 {
-    return f(e);
+    auto env = convert_env(e);
+    return f(env);
 }
 
 void test(
     const ops_t &ops,
     const ast::grammar<std::string::const_iterator> &g,
     const std::string &text,
-    const env_t &env,
+    const std::map<std::string, double> &e,
     double r,
     bool verbose=false,
     bool debug=false)
@@ -211,16 +252,18 @@ void test(
         std::get<3>(counters)
     );
 
+    reset_const_names();
     auto start_compile = std::chrono::steady_clock::now();
     compiled_f f = ast_node_compiler::compile_tree(cops, tree);
     auto elapsed_compile = std::chrono::steady_clock::now() - start_compile;
 
     auto start_exec = std::chrono::steady_clock::now();
-    std::any result_exec = call_f_with_env(f, env);
+    std::any result_exec = call_f_with_env(f, e);
     auto elapsed_exec = std::chrono::steady_clock::now() - start_exec;
 
     interpreter interpreter(ops);
     auto start_interpret = std::chrono::steady_clock::now();
+    auto env = convert_env(e);
     std::any result_interpret = interpreter.interpret_tree(tree, env);
     auto elapsed_interpret = std::chrono::steady_clock::now() - start_compile;
 
@@ -248,27 +291,64 @@ compile_node_f compile_number = [](const ast::ast_node &node) -> compiled_f
 {
     auto value = boost::get<double>(node);
     return [value](const env_t&){
-        return std::any(value);
+        return value;
     };
 };
+
 
 compile_node_f compile_const = [](const ast::ast_node &node) -> compiled_f
 {
     auto value = boost::get<std::string>(node);
-    return [value](const env_t& e){
-        return e.find(value)->second;
+    auto it = const_name_2_index.find(value);
+    size_t index = next_index++;
+    if (it == const_name_2_index.end()) {
+        const_name_2_index[value] = index;
+    }
+    return [index](const env_t& e){
+        return e[index];
     };
 };
 
+
 ops_t ops = {
-    {"number", {nullptr, compile_number}},
-    {"const", {nullptr, compile_const}},
-    {"pow", {[](const std::vector<std::any>& args){ return std::any(pow(std::any_cast<double>(args[0]), std::any_cast<double>(args[1]))); }, nullptr}},
-    {"neg", {[](const std::vector<std::any>& args){ return std::any(- std::any_cast<double>(args[0])); }, nullptr}},
-    {"mul", {[](const std::vector<std::any>& args){ return std::any(std::any_cast<double>(args[0]) * std::any_cast<double>(args[1])); }, nullptr}},
-    {"div", {[](const std::vector<std::any>& args){ return std::any(std::any_cast<double>(args[0]) / std::any_cast<double>(args[1])); }, nullptr}},
-    {"add", {[](const std::vector<std::any>& args){ return std::any(std::any_cast<double>(args[0]) + std::any_cast<double>(args[1])); }, nullptr}},
-    {"sub", {[](const std::vector<std::any>& args){ return std::any(std::any_cast<double>(args[0]) - std::any_cast<double>(args[1])); }, nullptr}},
+    {"number", {{}, compile_number}},
+    {"const", {{}, compile_const}},
+
+    {"pow", {
+        std::function<double(double, double)>(
+            [](double a, double b){ return pow(a, b); }
+        ), nullptr}
+    },
+
+    {"neg", {
+        std::function<double(double)>(
+            [](double a){ return -a; }
+        ), nullptr}
+    },
+
+    {"mul", {
+        std::function<double(double, double)>(
+            [](double a, double b){ return a * b; }
+        ), nullptr}
+    },
+
+    {"div", {
+        std::function<double(double, double)>(
+            [](double a, double b){ return a / b; }
+        ), nullptr}
+    },
+
+    {"add", {
+        std::function<double(double, double)>(
+            [](double a, double b){ return a + b; }
+        ), nullptr}
+    },
+
+    {"sub", {
+        std::function<double(double, double)>(
+            [](double a, double b){ return a - b; }
+        ), nullptr}
+    },
 };
 
 
@@ -285,10 +365,10 @@ int main()
     test(ops, g, "x * 2 + -y", {{"x", 1.0}, {"y", 2.0}}, 0.0);
     test(ops, g, "x / 2 - 1 / y", {{"x", 1.0}, {"y", 2.0}}, 0.0);
     test(ops, g, "x ^ y - 1", {{"x", 1.0}, {"y", 2.0}}, 0.0);
-    test(ops, g, "2 + -3^x - 2*(3*y - -4*z^g^u)", {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}, {"g", 2.0}, {"u", 3.0}}, -2109.0, false);
+    test(ops, g, "2 + -3^x - 2*(3*y - -4*z^g^u)", {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}, {"g", 2.0}, {"u", 3.0}}, -2109.0);
 
     std::string text = "((z * y) - 4096 + 999) - (x * -1) / 0.1 - 999 - (4096 - -1 + (10 - 4096) * ((999 + x) * (z + 4096))) / ( -z / x / x - -1 + (4096 * y - z - -1)) - (999 + -1 / (0.1 + 10)) - ( -(4096 / -1) / ( -y +  -0.1))";
-    
+
     test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
 
 /*

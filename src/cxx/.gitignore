@@ -6,3 +6,7 @@ compile_vs_interpret_vararg
 
 varargs_test
 compile_vs_interpret_fast
+*callgrind*
+
+compile_vs_interpret_fastest
+

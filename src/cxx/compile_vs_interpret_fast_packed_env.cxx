@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <functional>
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 #include <any>
@@ -16,8 +17,11 @@
 #include "parser.hh"
 
 
+//TODO: 2) generic lambdas with curring
+//TODO: https://stackoverflow.com/questions/25885893/how-to-create-a-variadic-generic-lambda
 
-typedef std::function<std::any(const std::vector<std::any>&)> op_f;
+
+typedef std::any op_f;
 
 typedef std::map<std::string, std::any> env_t;
 
@@ -73,7 +77,11 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
         func(func),
         compile_token(compile_token),
         ops(ops)
-    {}
+    {
+        if (!func.has_value() && compile_token == nullptr) {
+            throw std::invalid_argument("ERROR: ast_node_compiler: At least func or compile_token must be provided.");
+        }
+    }
 
     compiled_f operator()(ast::ast_tree const& ast)
     {
@@ -85,21 +93,37 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
         }
 
         // return compiled argument
-        if (func == nullptr) {
+        if (!func.has_value()) {
             return args[0];
         }
-        
+
         // compile function call
-        return [_func = func, args] (const env_t& e) -> std::any {
-            std::vector<std::any> a;
-
-            // calculate args
-            std::transform(args.begin(), args.end(), std::back_inserter(a), 
-                [&e](compiled_f f){ return f(e); });
-
-            // return result of calling func on calculated args
-            return _func(a);
-        };
+        // The fastest way would be to use call stack directly.
+        // different implementations of lambdas depending on number of args (with or without checking at compile time)
+        if (args.size() == 1) {
+            return
+            [
+                _func = std::any_cast<std::function<std::any(std::any)>>(func),
+                arg0 = args[0]
+            ]
+            (const env_t& e) -> std::any
+            {
+                return _func(arg0(e));
+            };
+        } else if (args.size() == 2) {
+            return
+            [
+                _func = std::any_cast<std::function<std::any(std::any, std::any)>>(func),
+                arg0 = args[0],
+                arg1 = args[1]
+            ]
+            (const env_t& e) -> std::any
+            {
+                return _func(arg0(e), arg1(e));
+            };
+        } else {
+            throw std::invalid_argument("ERROR: ast_node_compiler::operator()(ast::ast_tree const&) not supported number of function arguments");
+        }
     }
 
     compiled_f operator()(std::string const& value)
@@ -117,7 +141,6 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
 
     std::weak_ptr<compiler_visitors_t> ops;
 };
-
 /*============================================================================================
  * 
  * 
@@ -137,28 +160,26 @@ struct interpreter
         auto func = op.first;
         auto compile_token = op.second;
 
-        std::vector<std::any> args;
-        if (func == nullptr) {
+        if (!func.has_value()) {
             // compile_token returns function compiled from token
-            auto f = compile_token(tree.children[0]);
-            std::any value = f(env);
-            return value;
+            return compile_token(tree.children[0])(env);
         } else {
-            // interpret args
-            BOOST_FOREACH(ast::ast_node const& node, tree.children) {
-                std::any arg = interpret_tree(boost::get<ast::ast_tree>(node), env);
-                args.push_back(arg);
-            }
-
             // interpret function call
-            return func(args);
+            if (tree.children.size() == 1) {
+                auto arg0 = interpret_tree(boost::get<ast::ast_tree>(tree.children[0]), env);
+                return std::any_cast<std::function<std::any(std::any)>>(func)(arg0);
+            } else if (tree.children.size() == 2) {
+                auto arg0 = interpret_tree(boost::get<ast::ast_tree>(tree.children[0]), env);
+                auto arg1 = interpret_tree(boost::get<ast::ast_tree>(tree.children[1]), env);
+                return std::any_cast<std::function<std::any(std::any, std::any)>>(func)(arg0, arg1);
+            } else {
+                throw std::invalid_argument("ERROR: interpreter::interpret_tree(const ast::ast_tree &, const env_t &) not supported number of function arguments");
+            }
         }
-
     }
 
     const ops_t &ops;
 };
-
 
 
 
@@ -252,6 +273,8 @@ compile_node_f compile_number = [](const ast::ast_node &node) -> compiled_f
     };
 };
 
+//TODO: add env packer and enable it at compile-time
+
 compile_node_f compile_const = [](const ast::ast_node &node) -> compiled_f
 {
     auto value = boost::get<std::string>(node);
@@ -260,15 +283,46 @@ compile_node_f compile_const = [](const ast::ast_node &node) -> compiled_f
     };
 };
 
+
 ops_t ops = {
-    {"number", {nullptr, compile_number}},
-    {"const", {nullptr, compile_const}},
-    {"pow", {[](const std::vector<std::any>& args){ return std::any(pow(std::any_cast<double>(args[0]), std::any_cast<double>(args[1]))); }, nullptr}},
-    {"neg", {[](const std::vector<std::any>& args){ return std::any(- std::any_cast<double>(args[0])); }, nullptr}},
-    {"mul", {[](const std::vector<std::any>& args){ return std::any(std::any_cast<double>(args[0]) * std::any_cast<double>(args[1])); }, nullptr}},
-    {"div", {[](const std::vector<std::any>& args){ return std::any(std::any_cast<double>(args[0]) / std::any_cast<double>(args[1])); }, nullptr}},
-    {"add", {[](const std::vector<std::any>& args){ return std::any(std::any_cast<double>(args[0]) + std::any_cast<double>(args[1])); }, nullptr}},
-    {"sub", {[](const std::vector<std::any>& args){ return std::any(std::any_cast<double>(args[0]) - std::any_cast<double>(args[1])); }, nullptr}},
+    {"number", {{}, compile_number}},
+    {"const", {{}, compile_const}},
+
+    {"pow", {
+        std::function<std::any(std::any, std::any)>(
+            [](std::any a, std::any b){ return std::any(pow(std::any_cast<double>(a), std::any_cast<double>(b))); }
+        ), nullptr}
+    },
+
+    {"neg", {
+        std::function<std::any(std::any)>(
+            [](std::any a){ return std::any(- std::any_cast<double>(a)); }
+        ), nullptr}
+    },
+
+    {"mul", {
+        std::function<std::any(std::any, std::any)>(
+            [](std::any a, std::any b){ return std::any(std::any_cast<double>(a) * std::any_cast<double>(b)); }
+        ), nullptr}
+    },
+
+    {"div", {
+        std::function<std::any(std::any, std::any)>(
+            [](std::any a, std::any b){ return std::any(std::any_cast<double>(a) / std::any_cast<double>(b)); }
+        ), nullptr}
+    },
+
+    {"add", {
+        std::function<std::any(std::any, std::any)>(
+            [](std::any a, std::any b){ return std::any(std::any_cast<double>(a) + std::any_cast<double>(b)); }
+        ), nullptr}
+    },
+
+    {"sub", {
+        std::function<std::any(std::any, std::any)>(
+            [](std::any a, std::any b){ return std::any(std::any_cast<double>(a) - std::any_cast<double>(b)); }
+        ), nullptr}
+    },
 };
 
 
@@ -285,19 +339,19 @@ int main()
     test(ops, g, "x * 2 + -y", {{"x", 1.0}, {"y", 2.0}}, 0.0);
     test(ops, g, "x / 2 - 1 / y", {{"x", 1.0}, {"y", 2.0}}, 0.0);
     test(ops, g, "x ^ y - 1", {{"x", 1.0}, {"y", 2.0}}, 0.0);
-    test(ops, g, "2 + -3^x - 2*(3*y - -4*z^g^u)", {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}, {"g", 2.0}, {"u", 3.0}}, -2109.0, false);
+    test(ops, g, "2 + -3^x - 2*(3*y - -4*z^g^u)", {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}, {"g", 2.0}, {"u", 3.0}}, -2109.0);
 
     std::string text = "((z * y) - 4096 + 999) - (x * -1) / 0.1 - 999 - (4096 - -1 + (10 - 4096) * ((999 + x) * (z + 4096))) / ( -z / x / x - -1 + (4096 * y - z - -1)) - (999 + -1 / (0.1 + 10)) - ( -(4096 / -1) / ( -y +  -0.1))";
-    
+
     test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
 
-/*
+
     while (text.size() < 5000) {
         text += " + " + text;
     }
 
     test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
-*/
+
 
     return 0;
 }
