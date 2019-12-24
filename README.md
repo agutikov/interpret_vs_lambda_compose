@@ -1,6 +1,11 @@
 # Interpretation vs. Lambda Composition
 
-Fascinating journey from dummy calculator interpreter to essentials of functional programming - composability of functions.
+Fascinating journey from dummy calculator to essentials of functional programming - composability of functions.
+
+Development of easy to use interface for DSL interpreter/compiler and
+implementation of flexible framework for creation of custom DSLs.
+
+Comparison of Python and C++ for this task in flexibility and performance. 
 
 ## Intro
 

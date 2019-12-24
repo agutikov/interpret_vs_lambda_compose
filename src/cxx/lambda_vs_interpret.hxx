@@ -1,3 +1,4 @@
+#pragma once
 
 #include <cstdio>
 #include <functional>
@@ -15,7 +16,7 @@
 
 #include "parser.hh"
 
-
+namespace li_v1 {
 
 typedef std::function<std::any(const std::vector<std::any>&)> op_f;
 
@@ -26,6 +27,43 @@ typedef std::function<std::any(const env_t&)> compiled_f;
 typedef std::function<compiled_f(const ast::ast_node &)> compile_node_f;
 
 typedef std::map<std::string, std::pair<op_f, compile_node_f>> ops_t;
+
+
+
+struct interpreter
+{
+    interpreter(const ops_t &ops) :
+        ops(ops)
+    {}
+
+    std::any interpret_tree(const ast::ast_tree &tree, const env_t &env)
+    {
+        // get op functions
+        auto op = ops.find(tree.name)->second;
+        auto func = op.first;
+        auto compile_token = op.second;
+
+        std::vector<std::any> args;
+        if (func == nullptr) {
+            // compile_token returns function compiled from token
+            auto f = compile_token(tree.children[0]);
+            std::any value = f(env);
+            return value;
+        } else {
+            // interpret args
+            BOOST_FOREACH(ast::ast_node const& node, tree.children) {
+                std::any arg = interpret_tree(boost::get<ast::ast_tree>(node), env);
+                args.push_back(arg);
+            }
+
+            // interpret function call
+            return func(args);
+        }
+
+    }
+
+    const ops_t &ops;
+};
 
 
 struct ast_node_compiler : boost::static_visitor<compiled_f>
@@ -118,129 +156,6 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
     std::weak_ptr<compiler_visitors_t> ops;
 };
 
-/*============================================================================================
- * 
- * 
- *============================================================================================
- */
-
-struct interpreter
-{
-    interpreter(const ops_t &ops) :
-        ops(ops)
-    {}
-
-    std::any interpret_tree(const ast::ast_tree &tree, const env_t &env)
-    {
-        // get op functions
-        auto op = ops.find(tree.name)->second;
-        auto func = op.first;
-        auto compile_token = op.second;
-
-        std::vector<std::any> args;
-        if (func == nullptr) {
-            // compile_token returns function compiled from token
-            auto f = compile_token(tree.children[0]);
-            std::any value = f(env);
-            return value;
-        } else {
-            // interpret args
-            BOOST_FOREACH(ast::ast_node const& node, tree.children) {
-                std::any arg = interpret_tree(boost::get<ast::ast_tree>(node), env);
-                args.push_back(arg);
-            }
-
-            // interpret function call
-            return func(args);
-        }
-
-    }
-
-    const ops_t &ops;
-};
-
-
-
-
-/*============================================================================================
- * 
- * 
- *============================================================================================
- */
-
-double us(std::chrono::steady_clock::duration d)
-{
-    return double(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()) / 1000.0;
-}
-
-std::any call_f_with_env(compiled_f &f, const env_t &e)
-{
-    return f(e);
-}
-
-void test(
-    const ops_t &ops,
-    const ast::grammar<std::string::const_iterator> &g,
-    const std::string &text,
-    const env_t &env,
-    double r,
-    bool verbose=false,
-    bool debug=false)
-{
-    printf("\n");
-    if (verbose) {
-        printf("\n%s\n", text.c_str());
-    }
-
-    auto cops = ast_node_compiler::generate_compiler_ops(ops);
-
-    auto start_parse = std::chrono::steady_clock::now();
-    auto tree = ast_parse(text, g);
-    auto elapsed_parse = std::chrono::steady_clock::now() - start_parse;
-
-    if (verbose) {
-        print_tree(tree);
-    }
-
-    auto counters = count_nodes(tree);
-    printf("chars: %ld, nodes: %d, subtrees: %d, leafs: %d, max_depth: %d\n",
-        text.size(),
-        std::get<0>(counters),
-        std::get<1>(counters),
-        std::get<2>(counters),
-        std::get<3>(counters)
-    );
-
-    auto start_compile = std::chrono::steady_clock::now();
-    compiled_f f = ast_node_compiler::compile_tree(cops, tree);
-    auto elapsed_compile = std::chrono::steady_clock::now() - start_compile;
-
-    auto start_exec = std::chrono::steady_clock::now();
-    std::any result_exec = call_f_with_env(f, env);
-    auto elapsed_exec = std::chrono::steady_clock::now() - start_exec;
-
-    interpreter interpreter(ops);
-    auto start_interpret = std::chrono::steady_clock::now();
-    std::any result_interpret = interpreter.interpret_tree(tree, env);
-    auto elapsed_interpret = std::chrono::steady_clock::now() - start_compile;
-
-    printf("parse: %.3f us, compile: %.3f us, exec: %.3f us, interpret: %.3f us, speedup: %.2f\n",
-        us(elapsed_parse),
-        us(elapsed_compile),
-        us(elapsed_exec),
-        us(elapsed_interpret),
-        us(elapsed_interpret)/us(elapsed_exec));
-
-    if (verbose) {
-        printf("result: %f\n", std::any_cast<double>(result_exec));
-    }
-}
-
-/*============================================================================================
- * 
- * 
- *============================================================================================
- */
 
 
 
@@ -272,37 +187,7 @@ ops_t ops = {
 };
 
 
-/*============================================================================================
- * 
- * 
- *============================================================================================
- */
-
-int main()
-{
-    ast::calculator_grammar<std::string::const_iterator> g;
-
-    test(ops, g, "x * 2 + -y", {{"x", 1.0}, {"y", 2.0}}, 0.0);
-    test(ops, g, "x / 2 - 1 / y", {{"x", 1.0}, {"y", 2.0}}, 0.0);
-    test(ops, g, "x ^ y - 1", {{"x", 1.0}, {"y", 2.0}}, 0.0);
-    test(ops, g, "2 + -3^x - 2*(3*y - -4*z^g^u)", {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}, {"g", 2.0}, {"u", 3.0}}, -2109.0, false);
-
-    std::string text = "((z * y) - 4096 + 999) - (x * -1) / 0.1 - 999 - (4096 - -1 + (10 - 4096) * ((999 + x) * (z + 4096))) / ( -z / x / x - -1 + (4096 * y - z - -1)) - (999 + -1 / (0.1 + 10)) - ( -(4096 / -1) / ( -y +  -0.1))";
-    
-    test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
-
-/*
-    while (text.size() < 5000) {
-        text += " + " + text;
-    }
-
-    test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
-*/
-
-    return 0;
-}
-
-
+} // namespace li_v1
 
 
 

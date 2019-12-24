@@ -1,4 +1,6 @@
 
+#pragma once
+
 #include <cstdio>
 #include <functional>
 #include <map>
@@ -16,12 +18,13 @@
 
 #include "parser.hh"
 
+namespace li_fast {
 
 typedef std::any op_f;
 
-typedef std::vector<double> env_t;
+typedef std::map<std::string, std::any> env_t;
 
-typedef std::function<double(const env_t&)> compiled_f;
+typedef std::function<std::any(const env_t&)> compiled_f;
 
 typedef std::function<compiled_f(const ast::ast_node &)> compile_node_f;
 
@@ -99,21 +102,21 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
         if (args.size() == 1) {
             return
             [
-                _func = std::any_cast<std::function<double(double)>>(func),
+                _func = std::any_cast<std::function<std::any(std::any)>>(func),
                 arg0 = args[0]
             ]
-            (const env_t& e) -> double
+            (const env_t& e) -> std::any
             {
                 return _func(arg0(e));
             };
         } else if (args.size() == 2) {
             return
             [
-                _func = std::any_cast<std::function<double(double, double)>>(func),
+                _func = std::any_cast<std::function<std::any(std::any, std::any)>>(func),
                 arg0 = args[0],
                 arg1 = args[1]
             ]
-            (const env_t& e) -> double
+            (const env_t& e) -> std::any
             {
                 return _func(arg0(e), arg1(e));
             };
@@ -137,11 +140,7 @@ struct ast_node_compiler : boost::static_visitor<compiled_f>
 
     std::weak_ptr<compiler_visitors_t> ops;
 };
-/*============================================================================================
- * 
- * 
- *============================================================================================
- */
+
 
 struct interpreter
 {
@@ -149,7 +148,7 @@ struct interpreter
         ops(ops)
     {}
 
-    double interpret_tree(const ast::ast_tree &tree, const env_t &env)
+    std::any interpret_tree(const ast::ast_tree &tree, const env_t &env)
     {
         // get op functions
         auto op = ops.find(tree.name)->second;
@@ -163,11 +162,11 @@ struct interpreter
             // interpret function call
             if (tree.children.size() == 1) {
                 auto arg0 = interpret_tree(boost::get<ast::ast_tree>(tree.children[0]), env);
-                return std::any_cast<std::function<double(double)>>(func)(arg0);
+                return std::any_cast<std::function<std::any(std::any)>>(func)(arg0);
             } else if (tree.children.size() == 2) {
                 auto arg0 = interpret_tree(boost::get<ast::ast_tree>(tree.children[0]), env);
                 auto arg1 = interpret_tree(boost::get<ast::ast_tree>(tree.children[1]), env);
-                return std::any_cast<std::function<double(double, double)>>(func)(arg0, arg1);
+                return std::any_cast<std::function<std::any(std::any, std::any)>>(func)(arg0, arg1);
             } else {
                 throw std::invalid_argument("ERROR: interpreter::interpret_tree(const ast::ast_tree &, const env_t &) not supported number of function arguments");
             }
@@ -178,120 +177,11 @@ struct interpreter
 };
 
 
-
-std::map<std::string, size_t> const_name_2_index;
-size_t next_index = 0;
-
-void reset_const_names()
-{
-    next_index = 0;
-    const_name_2_index = {};
-}
-
-env_t convert_env(const std::map<std::string, double> &e)
-{
-    env_t v;
-    for (const auto& [key, value] : e) {
-        auto it = const_name_2_index.find(key);
-        if (v.size() <= it->second) {
-            v.resize(it->second + 1);
-        }
-        v[it->second] = value;
-    }
-    return v;
-}
-
-
-/*============================================================================================
- * 
- * 
- *============================================================================================
- */
-
-double us(std::chrono::steady_clock::duration d)
-{
-    return double(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()) / 1000.0;
-}
-
-double call_f_with_env(compiled_f &f, const std::map<std::string, double> &e)
-{
-    auto env = convert_env(e);
-    return f(env);
-}
-
-void test(
-    const ops_t &ops,
-    const ast::grammar<std::string::const_iterator> &g,
-    const std::string &text,
-    const std::map<std::string, double> &e,
-    double r,
-    bool verbose=false,
-    bool debug=false)
-{
-    printf("\n");
-    if (verbose) {
-        printf("\n%s\n", text.c_str());
-    }
-
-    auto cops = ast_node_compiler::generate_compiler_ops(ops);
-
-    auto start_parse = std::chrono::steady_clock::now();
-    auto tree = ast_parse(text, g);
-    auto elapsed_parse = std::chrono::steady_clock::now() - start_parse;
-
-    if (verbose) {
-        print_tree(tree);
-    }
-
-    auto counters = count_nodes(tree);
-    printf("chars: %ld, nodes: %d, subtrees: %d, leafs: %d, max_depth: %d\n",
-        text.size(),
-        std::get<0>(counters),
-        std::get<1>(counters),
-        std::get<2>(counters),
-        std::get<3>(counters)
-    );
-
-    reset_const_names();
-    auto start_compile = std::chrono::steady_clock::now();
-    compiled_f f = ast_node_compiler::compile_tree(cops, tree);
-    auto elapsed_compile = std::chrono::steady_clock::now() - start_compile;
-
-    auto start_exec = std::chrono::steady_clock::now();
-    std::any result_exec = call_f_with_env(f, e);
-    auto elapsed_exec = std::chrono::steady_clock::now() - start_exec;
-
-    interpreter interpreter(ops);
-    auto start_interpret = std::chrono::steady_clock::now();
-    auto env = convert_env(e);
-    std::any result_interpret = interpreter.interpret_tree(tree, env);
-    auto elapsed_interpret = std::chrono::steady_clock::now() - start_compile;
-
-    printf("parse: %.3f us, compile: %.3f us, exec: %.3f us, interpret: %.3f us, speedup: %.2f\n",
-        us(elapsed_parse),
-        us(elapsed_compile),
-        us(elapsed_exec),
-        us(elapsed_interpret),
-        us(elapsed_interpret)/us(elapsed_exec));
-
-    if (verbose) {
-        printf("result: %f\n", std::any_cast<double>(result_exec));
-    }
-}
-
-/*============================================================================================
- * 
- * 
- *============================================================================================
- */
-
-
-
 compile_node_f compile_number = [](const ast::ast_node &node) -> compiled_f
 {
     auto value = boost::get<double>(node);
     return [value](const env_t&){
-        return value;
+        return std::any(value);
     };
 };
 
@@ -299,13 +189,8 @@ compile_node_f compile_number = [](const ast::ast_node &node) -> compiled_f
 compile_node_f compile_const = [](const ast::ast_node &node) -> compiled_f
 {
     auto value = boost::get<std::string>(node);
-    auto it = const_name_2_index.find(value);
-    size_t index = next_index++;
-    if (it == const_name_2_index.end()) {
-        const_name_2_index[value] = index;
-    }
-    return [index](const env_t& e){
-        return e[index];
+    return [value](const env_t& e){
+        return e.find(value)->second;
     };
 };
 
@@ -315,73 +200,44 @@ ops_t ops = {
     {"const", {{}, compile_const}},
 
     {"pow", {
-        std::function<double(double, double)>(
-            [](double a, double b){ return pow(a, b); }
+        std::function<std::any(std::any, std::any)>(
+            [](std::any a, std::any b){ return std::any(pow(std::any_cast<double>(a), std::any_cast<double>(b))); }
         ), nullptr}
     },
 
     {"neg", {
-        std::function<double(double)>(
-            [](double a){ return -a; }
+        std::function<std::any(std::any)>(
+            [](std::any a){ return std::any(- std::any_cast<double>(a)); }
         ), nullptr}
     },
 
     {"mul", {
-        std::function<double(double, double)>(
-            [](double a, double b){ return a * b; }
+        std::function<std::any(std::any, std::any)>(
+            [](std::any a, std::any b){ return std::any(std::any_cast<double>(a) * std::any_cast<double>(b)); }
         ), nullptr}
     },
 
     {"div", {
-        std::function<double(double, double)>(
-            [](double a, double b){ return a / b; }
+        std::function<std::any(std::any, std::any)>(
+            [](std::any a, std::any b){ return std::any(std::any_cast<double>(a) / std::any_cast<double>(b)); }
         ), nullptr}
     },
 
     {"add", {
-        std::function<double(double, double)>(
-            [](double a, double b){ return a + b; }
+        std::function<std::any(std::any, std::any)>(
+            [](std::any a, std::any b){ return std::any(std::any_cast<double>(a) + std::any_cast<double>(b)); }
         ), nullptr}
     },
 
     {"sub", {
-        std::function<double(double, double)>(
-            [](double a, double b){ return a - b; }
+        std::function<std::any(std::any, std::any)>(
+            [](std::any a, std::any b){ return std::any(std::any_cast<double>(a) - std::any_cast<double>(b)); }
         ), nullptr}
     },
 };
 
 
-/*============================================================================================
- * 
- * 
- *============================================================================================
- */
-
-int main()
-{
-    ast::calculator_grammar<std::string::const_iterator> g;
-
-    test(ops, g, "x * 2 + -y", {{"x", 1.0}, {"y", 2.0}}, 0.0);
-    test(ops, g, "x / 2 - 1 / y", {{"x", 1.0}, {"y", 2.0}}, 0.0);
-    test(ops, g, "x ^ y - 1", {{"x", 1.0}, {"y", 2.0}}, 0.0);
-    test(ops, g, "2 + -3^x - 2*(3*y - -4*z^g^u)", {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}, {"g", 2.0}, {"u", 3.0}}, -2109.0);
-
-    std::string text = "((z * y) - 4096 + 999) - (x * -1) / 0.1 - 999 - (4096 - -1 + (10 - 4096) * ((999 + x) * (z + 4096))) / ( -z / x / x - -1 + (4096 * y - z - -1)) - (999 + -1 / (0.1 + 10)) - ( -(4096 / -1) / ( -y +  -0.1))";
-
-    test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
-
-/*
-    while (text.size() < 5000) {
-        text += " + " + text;
-    }
-
-    test(ops, g, text, {{"x", 1.0}, {"y", 10.0}, {"z", 2.0}}, 0.0, false, true);
-*/
-
-    return 0;
-}
-
+} // namespace li_fast
 
 
 

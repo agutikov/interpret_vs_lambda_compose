@@ -10,3 +10,5 @@ compile_vs_interpret_fast
 
 compile_vs_interpret_fastest
 
+test
+bench

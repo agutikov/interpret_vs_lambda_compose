@@ -190,8 +190,6 @@ namespace ast
             }
 
            this->start = sum[_val = _1];
-           // TODO: Why compiler not allow this:
-           // start = sum[_val = _1];
         }
 
         qi::rule<Iterator, std::string(), ascii::space_type> CNAME;

@@ -863,8 +863,7 @@ functors = {
 
 c3 = make_compiler([{**list_functions, **functors}, [number_arithmetic, number_literals, args]])
 
-verbose = True
-test_arithmetic_and_functors = lambda *args, **kvargs: test(c3, verbose=verbose, *args, **kvargs)
+test_arithmetic_and_functors = lambda *args, **kvargs: test(c3, verbose=False, *args, **kvargs)
 
 def vtest_af(tests):
     for text, input, output in tests:
