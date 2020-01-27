@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import sys
 import uuid
 from typing import List, Dict, Tuple, Callable, Any
 import lark
@@ -460,22 +461,26 @@ assert(1.1 == compile_arithmetic("1.1")({}))
 
 print(f'{"="*80}\n{" "*20}Arithmetic\n{"="*80}')
 
-test(arithmetic_ops, arithmetic_parser, "x * 2 + -y", {'x': 1, 'y': 2}, 0)
-test(arithmetic_ops, arithmetic_parser, "x / 2 - 1 / y", {'x': 1, 'y': 2}, 0)
-test(arithmetic_ops, arithmetic_parser, "x ^ y - 1", {'x': 1, 'y': 2}, 0)
+#test(arithmetic_ops, arithmetic_parser, "x * 2 + -y", {'x': 1, 'y': 2}, 0)
+#test(arithmetic_ops, arithmetic_parser, "x / 2 - 1 / y", {'x': 1, 'y': 2}, 0)
+#test(arithmetic_ops, arithmetic_parser, "x ^ y - 1", {'x': 1, 'y': 2}, 0)
 
-test(arithmetic_ops, arithmetic_parser, "2 + -3^x - 2*(3*y - -4*z^g^u)", {'x': 1, 'y': 10, 'z': 2, 'g': 2, 'u': 3}, -2109, verbose=False)
+#test(arithmetic_ops, arithmetic_parser, "2 + -3^x - 2*(3*y - -4*z^g^u)", {'x': 1, 'y': 10, 'z': 2, 'g': 2, 'u': 3}, -2109, verbose=False)
 
 text = "((z * y) - 4096 + 999) - (x * -1) / 0.1 - 999 - (4096 - -1 + (10 - 4096) * ((999 + x) * (z + 4096))) / ( -z / x / x - -1 + (4096 * y - z - -1)) - (999 + -1 / (0.1 + 10)) - ( -(4096 / -1) / ( -y +  -0.1))"
 
-test(arithmetic_ops, arithmetic_parser, text, {'x': 1, 'y': 10, 'z': 2}, 0, verbose=False, debug=True)
+#test(arithmetic_ops, arithmetic_parser, text, {'x': 1, 'y': 10, 'z': 2}, 0, verbose=False, debug=True)
 
-while len(text) < 5000:
+while len(text) < 10000:
     text += " + " + text
+
+sys.setrecursionlimit(10000);
 
 test(arithmetic_ops, arithmetic_parser, text, {'x': 1, 'y': 10, 'z': 2}, 0, verbose=False, debug=True)
 
 print(f'\n{"="*80}\n'*2)
+
+quit()
 
 #
 # ====================================================================================================

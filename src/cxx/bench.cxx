@@ -16,6 +16,7 @@
 #include "parser.hh"
 #include "test.hxx"
 #include "lambda_vs_interpret.hxx"
+#include "lambda_vs_interpret_array.hxx"
 #include "lambda_vs_interpret_fast.hxx"
 #include "lambda_vs_interpret_stack.hxx"
 #include "lambda_vs_interpret_fast_packed_env.hxx"
@@ -49,6 +50,9 @@ int main()
 
     print_delim("Stack");
     run_tests<li_stack::ops_t, li_stack::env_t, li_stack::ast_node_compiler, li_stack::interpreter>(li_stack::ops);
+
+    print_delim("Array");
+    run_tests<li_array::ops_t, li_array::env_t, li_array::ast_node_compiler, li_array::interpreter>(li_array::ops);
 
     print_delim("Fast");
     run_tests<li_fast::ops_t, li_fast::env_t, li_fast::ast_node_compiler, li_fast::interpreter>(li_fast::ops);
